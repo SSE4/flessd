@@ -20,20 +20,10 @@
 
 #include "defs.h"
 
-/* CD variables */
-typedef struct {
-    SDL_CD *device;
-    int playmode;
-    int paused;
-    int playing;
-    int track;
-} cd;
-static cd *cd_bank = NULL;
-static int cd_count = 0;
-
 /* Sample variables */
 static struct FSOUND_SAMPLE **sample_bank = NULL;
 static int sample_count = 0;
+static MIX_Mixer * mixer = NULL;
 
 DLL_API signed char F_API FSOUND_SetOutput(int outputtype)
 {
@@ -91,42 +81,31 @@ DLL_API signed char F_API FSOUND_SetMemorySystem(void *pool, int poollen, FSOUND
     return TRUE;
 }
 
+// see SDL_mixer/docs/README-migration.md
+#define MIX_DEFAULT_FREQUENCY 44100
+#define MIX_DEFAULT_FORMAT SDL_AUDIO_S16
+#define MIX_DEFAULT_CHANNELS 2
 
 DLL_API signed char F_API FSOUND_Init(int mixrate, int maxsoftwarechannels, unsigned int flags)
 {
-    int i;
-
     /* Initialise the sample bank */
     sample_bank = NULL;
     sample_count = 0;
 
     /* Initialise SDL_mixer */
-    if(SDL_InitSubSystem(SDL_INIT_AUDIO | SDL_INIT_NOPARACHUTE) < 0)
+    if(SDL_InitSubSystem(SDL_INIT_AUDIO) < 0)
         return FALSE;
 
-    if(Mix_OpenAudio(MIX_DEFAULT_FREQUENCY, MIX_DEFAULT_FORMAT, 2, 1024) < 0)
+    if (!MIX_Init())
         return FALSE;
 
-    if(Sound_Init() < 0)
+    SDL_AudioSpec spec;
+    spec.format = MIX_DEFAULT_FORMAT;
+    spec.channels = MIX_DEFAULT_CHANNELS;
+    spec.freq = MIX_DEFAULT_FREQUENCY;
+    mixer = MIX_CreateMixerDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec);
+    if(!mixer)
         return FALSE;
-
-    /* Initialise CD drive */
-    if(SDL_InitSubSystem(SDL_INIT_CDROM) == 0)
-    {
-        cd_count = SDL_CDNumDrives();
-
-        if(cd_count)
-            cd_bank = malloc(sizeof(cd) * cd_count);
-
-        for(i = 0; i < cd_count; i++)
-        {
-            cd_bank[i].device = SDL_CDOpen(i);
-            cd_bank[i].playmode = 0;
-            cd_bank[i].paused = 0;
-            cd_bank[i].playing = 0;
-            cd_bank[i].track = -1;
-        }
-    }
 
     return TRUE;
 }
@@ -135,10 +114,8 @@ DLL_API void F_API FSOUND_Close()
 {
     /* FIXME: do something with our allocated data */
 
-    /* FIXME: do something with our CD drives */
-
-    Sound_Quit();
-    Mix_CloseAudio();
+    MIX_DestroyMixer(mixer);
+    MIX_Quit();
     SDL_QuitSubSystem(SDL_INIT_AUDIO);
 }
 
@@ -283,14 +260,15 @@ DLL_API FSOUND_SAMPLE *F_API
 FSOUND_Sample_Load(int index, const char *name_or_data, unsigned int mode,
                    int offset, int length)
 {
+#if 0
     int pos = 0, grow = 1;
     FSOUND_SAMPLE *fsound_sample;
-    Mix_Chunk *wave = NULL;
+    MIX_Audio *wave = NULL;
 
     /* First, try to open the sample */
     if(!(mode & FSOUND_LOADMEMORY))
     {
-        wave = Mix_LoadWAV(name_or_data);
+        wave = MIX_LoadAudio(mixer, name_or_data, false);
     }
 
     /* SDL_mixer could not directly load sample; use SDL_sound instead */
@@ -408,6 +386,9 @@ FSOUND_Sample_Load(int index, const char *name_or_data, unsigned int mode,
     fsound_sample->mode = mode;
 
     return fsound_sample;
+#endif
+    STUB();
+    return NULL;
 }
 
 DLL_API FSOUND_SAMPLE * F_API FSOUND_Sample_Alloc(int index, int length, unsigned int mode, int deffreq, int defvol, int defpan, int defpri)
@@ -546,7 +527,11 @@ DLL_API int F_API FSOUND_PlaySound(int channel, FSOUND_SAMPLE *sptr)
     if(!sptr)
         return -1;
 
-    return Mix_PlayChannel(-1, sptr->wave, 0);
+    //MIX_Track * track = MIX_CreateTrack(mixer);
+    //MIX_SetTrackAudio(track, sptr->wave);
+    //return MIX_PlayTrack(track, 0);
+    STUB();
+    return TRUE;
 }
 
 DLL_API int F_API FSOUND_PlaySoundEx(int channel, FSOUND_SAMPLE *sptr, FSOUND_DSPUNIT *dsp, signed char startpaused)
@@ -557,7 +542,8 @@ DLL_API int F_API FSOUND_PlaySoundEx(int channel, FSOUND_SAMPLE *sptr, FSOUND_DS
 
 DLL_API signed char F_API FSOUND_StopSound(int channel)
 {
-    Mix_HaltChannel(channel);
+    //MIX_StopTrack(track);
+    STUB();
 
     return TRUE;
 }
@@ -572,15 +558,17 @@ DLL_API signed char F_API FSOUND_SetFrequency(int channel, int freq)
 DLL_API signed char F_API FSOUND_SetVolume(int channel, int vol)
 {
     /* FIXME: handle FSOUND_SetSFXMasterVolume */
-    Mix_Volume(channel, vol * MIX_MAX_VOLUME / 255);
+    //Mix_Volume(channel, vol * MIX_MAX_VOLUME / 255);
 
+    STUB();
     return TRUE;
 }
 
 DLL_API signed char F_API FSOUND_SetVolumeAbsolute(int channel, int vol)
 {
-    Mix_Volume(channel, vol * MIX_MAX_VOLUME / 255);
+    //Mix_Volume(channel, vol * MIX_MAX_VOLUME / 255);
 
+    STUB();
     return TRUE;
 }
 
@@ -1101,44 +1089,25 @@ DLL_API signed char F_API FSOUND_Stream_Net_GetStatus(FSOUND_STREAM *stream, int
 
 DLL_API signed char F_API FSOUND_CD_Play(char drive, int track)
 {
-    if((int)drive >= cd_count || cd_bank[(int)drive].device == NULL)
-        return FALSE;
-
-    SDL_CDPlayTracks(cd_bank[(int)drive].device, track - 1, 0, track, 0);
-
+    STUB();
     return TRUE;
 }
 
 DLL_API void F_API FSOUND_CD_SetPlayMode(char drive, signed char mode)
 {
-    if((int)drive >= cd_count || cd_bank[(int)drive].device == NULL)
-        return;
-
-    cd_bank[(int)drive].playmode = mode;
-
+    STUB();
     return;
 }
 
 DLL_API signed char F_API FSOUND_CD_Stop(char drive)
 {
-    if((int)drive >= cd_count || cd_bank[(int)drive].device == NULL)
-        return FALSE;
-
-    SDL_CDStop(cd_bank[(int)drive].device);
-
+    STUB();
     return TRUE;
 }
 
 DLL_API signed char F_API FSOUND_CD_SetPaused(char drive, signed char paused)
 {
-    if((int)drive >= cd_count || cd_bank[(int)drive].device == NULL)
-        return FALSE;
-
-    if(paused)
-        SDL_CDPause(cd_bank[(int)drive].device);
-    else
-        SDL_CDResume(cd_bank[(int)drive].device);
-
+    STUB();
     return TRUE;
 }
 
@@ -1150,66 +1119,32 @@ DLL_API signed char F_API FSOUND_CD_SetVolume(char drive, int volume)
 
 DLL_API signed char F_API FSOUND_CD_SetTrackTime(char drive, unsigned int ms)
 {
-    if((int)drive >= cd_count || cd_bank[(int)drive].device == NULL)
-        return FALSE;
-
-    if(!CD_INDRIVE(SDL_CDStatus(cd_bank[(int)drive].device)))
-        return FALSE;
-
-    if(SDL_CDPlayTracks(cd_bank[(int)drive].device,
-                        cd_bank[(int)drive].device->cur_track, 0,
-                        cd_bank[(int)drive].device->cur_track,
-                        ms * CD_FPS / 1000))
-        return FALSE;
-
+    STUB();
     return TRUE;
 }
 
 DLL_API signed char F_API FSOUND_CD_OpenTray(char drive, signed char open)
 {
-    if((int)drive >= cd_count || cd_bank[(int)drive].device == NULL)
-        return FALSE;
-
-    if(!CD_INDRIVE(SDL_CDStatus(cd_bank[(int)drive].device)))
-        return FALSE;
-
-    if(SDL_CDEject(cd_bank[(int)drive].device) < 0)
-        return FALSE;
-
+    STUB();
     return TRUE;
 }
 
 DLL_API signed char F_API FSOUND_CD_GetPaused(char drive)
 {
-    if((int)drive >= cd_count || cd_bank[(int)drive].device == NULL)
-        return FALSE;
-
-    if(!CD_INDRIVE(SDL_CDStatus(cd_bank[(int)drive].device)))
-        return FALSE;
-
-    return (cd_bank[(int)drive].device->status == CD_PAUSED) ? TRUE : FALSE;
+    STUB();
+    return TRUE;
 }
 
 DLL_API int F_API FSOUND_CD_GetTrack(char drive)
 {
-    if((int)drive >= cd_count || cd_bank[(int)drive].device == NULL)
-        return -1;
-
-    if(!CD_INDRIVE(SDL_CDStatus(cd_bank[(int)drive].device)))
-        return -1;
-
-    return cd_bank[(int)drive].device->cur_track;
+    STUB();
+    return TRUE;
 }
 
 DLL_API int F_API FSOUND_CD_GetNumTracks(char drive)
 {
-    if((int)drive >= cd_count || cd_bank[(int)drive].device == NULL)
-        return -1;
-
-    if(!CD_INDRIVE(SDL_CDStatus(cd_bank[(int)drive].device)))
-        return -1;
-
-    return cd_bank[(int)drive].device->numtracks;
+    STUB();
+    return TRUE;
 }
 
 DLL_API int F_API FSOUND_CD_GetVolume(char drive)
@@ -1220,16 +1155,8 @@ DLL_API int F_API FSOUND_CD_GetVolume(char drive)
 
 DLL_API int F_API FSOUND_CD_GetTrackLength(char drive, int track)
 {
-    if((int)drive >= cd_count || cd_bank[(int)drive].device == NULL)
-        return -1;
-
-    if(!CD_INDRIVE(SDL_CDStatus(cd_bank[(int)drive].device)))
-        return -1;
-
-    if(track < 1 || track > cd_bank[(int)drive].device->numtracks)
-        return -1;
-
-    return cd_bank[(int)drive].device->track[track - 1].length * 1000 / CD_FPS;
+    STUB();
+    return TRUE;
 }
 
 DLL_API int F_API FSOUND_CD_GetTrackTime(char drive)
