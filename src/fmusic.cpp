@@ -9,8 +9,8 @@
  *  http://sam.zoy.org/projects/COPYING.WTFPL for more details.
  */
 
-#include <stdlib.h>
-#include <stdio.h>
+#include <cstdlib>
+#include <cstdio>
 
 #include "flessd/types.h"
 #include "flessd/music.h"

@@ -1,5 +1,4 @@
-#ifndef _FLESSD_TYPES_H_
-#define _FLESSD_TYPES_H_
+#pragma once
 
 #ifndef TRUE
 #   define TRUE 1
@@ -376,5 +375,3 @@ typedef struct _FSOUND_TOC_TAG
     int  sec[100];
     int  frame[100];
 } FSOUND_TOC_TAG;
-
-#endif

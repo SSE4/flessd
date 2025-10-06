@@ -1,5 +1,4 @@
-#ifndef _FLESSD_SOUND_H_
-#define _FLESSD_SOUND_H_
+#pragma once
 
 #ifdef __cplusplus
 extern "C" {
@@ -229,6 +228,4 @@ DLL_API int             F_API FSOUND_Record_GetPosition();
 
 #ifdef __cplusplus
 }
-#endif
-
 #endif

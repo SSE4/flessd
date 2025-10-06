@@ -9,10 +9,11 @@
  *  http://sam.zoy.org/projects/COPYING.WTFPL for more details.
  */
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdint.h>
+#include <fstream>
+#include <cstdlib>
+#include <cstdio>
+#include <cstring>
+#include <cstdint>
 
 #include "flessd/types.h"
 #include "flessd/music.h"
@@ -20,10 +21,29 @@
 
 #include "defs.h"
 
+#include <vector>
+#include <memory>
+
 /* Sample variables */
-static struct FSOUND_SAMPLE **sample_bank = NULL;
-static int sample_count = 0;
-static MIX_Mixer * mixer = NULL;
+
+using Stream = FSOUND_STREAM;
+using Sample = FSOUND_SAMPLE;
+
+struct Track {
+    MIX_Track * handle = nullptr;
+    bool is_used = false;
+    size_t channel = 0;
+};
+
+struct FSound
+{
+    std::vector<std::unique_ptr<Stream>> streams;
+    std::vector<std::unique_ptr<Sample>> samples;
+    std::vector<std::unique_ptr<Track>> tracks;
+    MIX_Mixer* mixer = nullptr;
+};
+
+static FSound global_instance;
 
 DLL_API signed char F_API FSOUND_SetOutput(int outputtype)
 {
@@ -36,10 +56,7 @@ DLL_API signed char F_API FSOUND_SetDriver(int driver)
     if(driver < 0)
         return TRUE; /* FIXME: disable everything */
 
-    if(driver == 0)
-        driver = 1;
-
-    if(driver < 1 || driver > 1)
+    if(driver != 0)
         return FALSE;
 
     return TRUE;
@@ -88,33 +105,56 @@ DLL_API signed char F_API FSOUND_SetMemorySystem(void *pool, int poollen, FSOUND
 
 DLL_API signed char F_API FSOUND_Init(int mixrate, int maxsoftwarechannels, unsigned int flags)
 {
-    /* Initialise the sample bank */
-    sample_bank = NULL;
-    sample_count = 0;
+    int i;
 
     /* Initialise SDL_mixer */
-    if(SDL_InitSubSystem(SDL_INIT_AUDIO) < 0)
-        return FALSE;
+    if(!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+        return false;
+    }
 
-    if (!MIX_Init())
-        return FALSE;
+    if (!MIX_Init()) {
+        return false;
+    }
 
     SDL_AudioSpec spec;
     spec.format = MIX_DEFAULT_FORMAT;
     spec.channels = MIX_DEFAULT_CHANNELS;
     spec.freq = MIX_DEFAULT_FREQUENCY;
-    mixer = MIX_CreateMixerDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec);
-    if(!mixer)
-        return FALSE;
+    global_instance.mixer = MIX_CreateMixerDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec);
+    if(!global_instance.mixer) {
+        return false;
+    }
 
-    return TRUE;
+    int tracks_count = maxsoftwarechannels;
+
+    for (i = 0; i < tracks_count; ++ i) {
+        auto track = std::make_unique<Track>();
+
+        track->channel = i;
+
+        track->handle = MIX_CreateTrack(global_instance.mixer);
+        if (!track->handle) {
+            return false;
+        }
+        track->is_used = false;
+
+		global_instance.tracks.emplace_back(std::move(track));
+    }
+
+    return true;
 }
 
 DLL_API void F_API FSOUND_Close()
 {
-    /* FIXME: do something with our allocated data */
+    if (global_instance.mixer) {
 
-    MIX_DestroyMixer(mixer);
+        MIX_DestroyMixer(global_instance.mixer);
+        global_instance.mixer = nullptr;
+
+        global_instance.samples.clear();
+        global_instance.streams.clear();
+        global_instance.tracks.clear();
+    }
     MIX_Quit();
     SDL_QuitSubSystem(SDL_INIT_AUDIO);
 }
@@ -195,7 +235,7 @@ DLL_API int F_API FSOUND_GetNumDrivers()
 
 DLL_API const char * F_API FSOUND_GetDriverName(int id)
 {
-    if(id < 1 || id > 1)
+    if(id != 0)
         return "(unknown)";
 
     return "FLESSD";
@@ -203,7 +243,9 @@ DLL_API const char * F_API FSOUND_GetDriverName(int id)
 
 DLL_API signed char F_API FSOUND_GetDriverCaps(int id, unsigned int *caps)
 {
-    STUB();
+    if (caps) {
+        *caps = 0;
+    }
     return TRUE;
 }
 
@@ -260,135 +302,36 @@ DLL_API FSOUND_SAMPLE *F_API
 FSOUND_Sample_Load(int index, const char *name_or_data, unsigned int mode,
                    int offset, int length)
 {
-#if 0
-    int pos = 0, grow = 1;
     FSOUND_SAMPLE *fsound_sample;
-    MIX_Audio *wave = NULL;
+    MIX_Audio *wave = nullptr;
 
-    /* First, try to open the sample */
-    if(!(mode & FSOUND_LOADMEMORY))
-    {
-        wave = MIX_LoadAudio(mixer, name_or_data, false);
-    }
+    bool load_from_memory = FSOUND_LOADMEMORY == (mode & FSOUND_LOADMEMORY);
+    bool is_managed = index == FSOUND_UNMANAGED;
 
-    /* SDL_mixer could not directly load sample; use SDL_sound instead */
-    if(!wave)
-    {
-        SDL_RWops *rw;
-
-        if(mode & FSOUND_LOADMEMORY)
-            rw = SDL_RWFromMem((void *)name_or_data, length);
-        else
-            rw = SDL_RWFromFile(name_or_data, "rb");
-
-        if(rw)
-        {
-            Sound_Sample *sample;
-            Sound_AudioInfo audioinfo;
-
-            audioinfo.format = MIX_DEFAULT_FORMAT;
-            audioinfo.channels = MIX_DEFAULT_CHANNELS;
-            audioinfo.rate = MIX_DEFAULT_FREQUENCY;
-
-            sample = Sound_NewSample(rw, NULL, &audioinfo, 0x10000);
-
-            if(sample)
-            {
-                Sound_DecodeAll(sample);
-
-                wave = malloc(sizeof(Mix_Chunk));
-                wave->allocated = 1;
-                wave->abuf = sample->buffer;
-                wave->alen = sample->buffer_size;
-                wave->volume = MIX_MAX_VOLUME;
-
-                SDL_FreeRW(rw);
-            }
+    if (load_from_memory) {
+        SDL_IOStream* io = SDL_IOFromMem(const_cast<void*>(reinterpret_cast<const void*>(name_or_data)), length);
+        if (!io) {
+			return nullptr;
         }
+        wave = MIX_LoadAudio_IO(global_instance.mixer, io, false, true);
+    } else {
+        wave = MIX_LoadAudio(global_instance.mixer, name_or_data, false);
     }
 
-    if(!wave)
-        return NULL;
-
-    /* Now insert the sample in our bank */
-    if(index == FSOUND_FREE)
-    {
-        index = sample_count ? (sample_bank[sample_count - 1]->index + 1) : 0;
-        pos = sample_count;
-        grow = 1;
-    }
-    else if(index == FSOUND_UNMANAGED)
-    {
-        pos = -1;
-        grow = 0;
-    }
-    else
-    {
-        int min = 0, max = sample_count - 1, mid;
-
-        /* Deal with border cases */
-        if(index <= sample_bank[min]->index)
-        {
-            pos = min;
-            grow = (index != sample_bank[min]->index);
-        }
-        else if (index < sample_bank[max]->index)
-        {
-            pos = max + 1;
-            grow = 1;
-        }
-
-        /* Look into our list */
-        for(min = 0, max = sample_count - 1; min != max; )
-        {
-            mid = (min + max) / 2;
-            if(sample_bank[mid]->index == index)
-            {
-                pos = mid;
-                grow = 0;
-                break;
-            }
-            else if(mid == min)
-            {
-                pos = max;
-                grow = (index != sample_bank[max]->index);
-                break;
-            }
-            else if(index < sample_bank[mid]->index)
-                max = mid;
-            else
-                min = mid;
-        }
+    if(!wave) {
+        return nullptr;
     }
 
-    /* Grow sample list if necessary */
-    if(grow)
-    {
-        if(sample_count)
-            sample_bank = realloc(sample_bank,
-                                  sizeof(void *) * (sample_count + 1));
-        else
-            sample_bank = malloc(sizeof(void *) * (sample_count + 1));
-        memmove(sample_bank + pos + 1, sample_bank + pos,
-                sizeof(void *) * (sample_count - pos));
-        sample_count++;
-        sample_bank[pos] = malloc(sizeof(FSOUND_SAMPLE));
-    }
+    auto sample = std::make_unique<Sample>();
 
-    if(pos == -1)
-        fsound_sample = malloc(sizeof(FSOUND_SAMPLE));
-    else
-        /* FIXME: remove previous sample if necessary */
-        fsound_sample = sample_bank[pos];
+    sample->index = index;
+    sample->wave = wave;
+    sample->mode = mode;
+    sample->is_managed = is_managed;
 
-    fsound_sample->index = index;
-    fsound_sample->wave = wave;
-    fsound_sample->mode = mode;
+    auto & sample_ref = global_instance.samples.emplace_back(std::move(sample));
 
-    return fsound_sample;
-#endif
-    STUB();
-    return NULL;
+    return sample_ref.get();
 }
 
 DLL_API FSOUND_SAMPLE * F_API FSOUND_Sample_Alloc(int index, int length, unsigned int mode, int deffreq, int defvol, int defpan, int defpri)
@@ -424,20 +367,16 @@ DLL_API signed char F_API FSOUND_Sample_Unlock(FSOUND_SAMPLE *sptr, void *ptr1, 
 
 DLL_API signed char F_API FSOUND_Sample_SetMode(FSOUND_SAMPLE *sptr, unsigned int mode)
 {
-    static unsigned int const allowed = FSOUND_LOOP_OFF
-                                         | FSOUND_LOOP_NORMAL
-                                         | FSOUND_LOOP_BIDI
-                                         | FSOUND_2D;
-    if(!sptr)
-        return FALSE;
+    if (!sptr) {
+        return false;
+    }
+    if (mode == FSOUND_LOOP_NORMAL) {
+        sptr->loop = true;
+    } else if (mode == FSOUND_LOOP_OFF) {
+        sptr->loop = false;
+    }
 
-    if(mode & ~allowed)
-        return FALSE;
-
-    /* FIXME: better flag integrity check */
-    sptr->mode = (sptr->mode & ~allowed) | mode;
-
-    return TRUE;
+    return true;
 }
 
 DLL_API signed char F_API FSOUND_Sample_SetLoopPoints(FSOUND_SAMPLE *sptr, int loopstart, int loopend)
@@ -483,9 +422,10 @@ DLL_API const char * F_API FSOUND_Sample_GetName(FSOUND_SAMPLE *sptr)
     return NULL;
 }
 
-DLL_API unsigned int F_API FSOUND_Sample_GetLength(FSOUND_SAMPLE *sptr)
-{
-    STUB();
+DLL_API unsigned int F_API FSOUND_Sample_GetLength(FSOUND_SAMPLE *sptr) {
+    if (sptr && sptr->wave) {
+        return MIX_GetAudioDuration(sptr->wave);
+    }
     return 0;
 }
 
@@ -497,7 +437,10 @@ DLL_API signed char F_API FSOUND_Sample_GetLoopPoints(FSOUND_SAMPLE *sptr, int *
 
 DLL_API signed char F_API FSOUND_Sample_GetDefaults(FSOUND_SAMPLE *sptr, int *deffreq, int *defvol, int *defpan, int *defpri)
 {
-    STUB();
+    if (deffreq) {
+        *deffreq = MIX_DEFAULT_FREQUENCY;
+    }
+
     return TRUE;
 }
 
@@ -524,28 +467,71 @@ DLL_API signed char F_API FSOUND_Sample_GetMinMaxDistance(FSOUND_SAMPLE *sptr, f
 
 DLL_API int F_API FSOUND_PlaySound(int channel, FSOUND_SAMPLE *sptr)
 {
-    if(!sptr)
-        return -1;
-
-    //MIX_Track * track = MIX_CreateTrack(mixer);
-    //MIX_SetTrackAudio(track, sptr->wave);
-    //return MIX_PlayTrack(track, 0);
-    STUB();
-    return TRUE;
+    return FSOUND_PlaySoundEx(channel, sptr, NULL, FALSE);
 }
 
 DLL_API int F_API FSOUND_PlaySoundEx(int channel, FSOUND_SAMPLE *sptr, FSOUND_DSPUNIT *dsp, signed char startpaused)
 {
-    STUB();
-    return 0;
+    if(!sptr)
+        return -1;
+
+    if (channel == FSOUND_FREE) {
+        for (const auto & track: global_instance.tracks) {
+
+            if (!track->is_used) {
+
+                if (!MIX_SetTrackAudio(track->handle, sptr->wave)) {
+                    return -1;
+                }
+                track->is_used = true;
+
+                SDL_PropertiesID properties = SDL_CreateProperties();
+                if (!properties) {
+                    return -1;
+                }
+                if (!SDL_SetNumberProperty(properties, MIX_PROP_PLAY_LOOPS_NUMBER, sptr->loop ? -1 : 0)) {
+                    return -1;
+                }
+
+                if (!MIX_PlayTrack(track->handle, properties)) {
+                    return -1;
+                }
+
+                SDL_DestroyProperties(properties);
+
+                if (startpaused) {
+                    if (!MIX_PauseTrack(track->handle)) {
+                        return -1;
+                    }
+                }
+                return track->channel;
+            }
+        }
+    } else {
+        abort();
+    }
+
+    return -1;
+}
+
+static bool check_channel(int channel) {
+    if (channel < 0 || channel >= global_instance.tracks.size()) {
+        return false;
+    }
+    return true;
 }
 
 DLL_API signed char F_API FSOUND_StopSound(int channel)
 {
-    //MIX_StopTrack(track);
-    STUB();
+    if (!check_channel(channel)) {
+        return false;
+    }
+    if (!MIX_StopTrack(global_instance.tracks[channel]->handle, FALSE)) {
+        return false;
+    }
+    global_instance.tracks[channel]->is_used = false;
 
-    return TRUE;
+    return true;
 }
 
 
@@ -557,11 +543,14 @@ DLL_API signed char F_API FSOUND_SetFrequency(int channel, int freq)
 
 DLL_API signed char F_API FSOUND_SetVolume(int channel, int vol)
 {
-    /* FIXME: handle FSOUND_SetSFXMasterVolume */
-    //Mix_Volume(channel, vol * MIX_MAX_VOLUME / 255);
+    if (!check_channel(channel)) {
+        return false;
+    }
+    if (!MIX_SetTrackGain(global_instance.tracks[channel]->handle, vol / 255.f)) {
+        return false;
+    }
 
-    STUB();
-    return TRUE;
+    return true;
 }
 
 DLL_API signed char F_API FSOUND_SetVolumeAbsolute(int channel, int vol)
@@ -575,6 +564,7 @@ DLL_API signed char F_API FSOUND_SetVolumeAbsolute(int channel, int vol)
 DLL_API signed char F_API FSOUND_SetPan(int channel, int pan)
 {
     STUB();
+    // MIX_SetTrackStereo
     return TRUE;
 }
 
@@ -604,8 +594,19 @@ DLL_API signed char F_API FSOUND_SetReserved(int channel, signed char reserved)
 
 DLL_API signed char F_API FSOUND_SetPaused(int channel, signed char paused)
 {
-    STUB();
-    return TRUE;
+    if (!check_channel(channel)) {
+        return false;
+    }
+    if (paused) {
+        if (!MIX_PauseTrack(global_instance.tracks[channel]->handle)) {
+            return false;
+        }
+    } else {
+        if (!MIX_ResumeTrack(global_instance.tracks[channel]->handle)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 DLL_API signed char F_API FSOUND_SetLoopMode(int channel, unsigned int loopmode)
@@ -616,8 +617,14 @@ DLL_API signed char F_API FSOUND_SetLoopMode(int channel, unsigned int loopmode)
 
 DLL_API signed char F_API FSOUND_SetCurrentPosition(int channel, unsigned int offset)
 {
-    STUB();
-    return TRUE;
+    // in SAMPLES (SDL also takes samples)
+    if (!check_channel(channel)) {
+        return false;
+    }
+    if (!MIX_SetTrackPlaybackPosition(global_instance.tracks[channel]->handle, offset)) {
+        return false;
+    }
+    return true;
 }
 
 DLL_API signed char F_API FSOUND_3D_SetAttributes(int channel, const float *pos, const float *vel)
@@ -635,9 +642,10 @@ DLL_API signed char F_API FSOUND_3D_SetMinMaxDistance(int channel, float min, fl
 
 DLL_API signed char F_API FSOUND_IsPlaying(int channel)
 {
-    /* FIXME: do something real here */
-    //STUB();
-    return FALSE;
+    if (!check_channel(channel)) {
+        return false;
+    }
+    return MIX_TrackPlaying(global_instance.tracks[channel]->handle);
 }
 
 DLL_API int F_API FSOUND_GetFrequency(int channel)
@@ -648,8 +656,10 @@ DLL_API int F_API FSOUND_GetFrequency(int channel)
 
 DLL_API int F_API FSOUND_GetVolume(int channel)
 {
-    STUB();
-    return 0;
+    if (!check_channel(channel)) {
+        return 0;
+    }
+    return static_cast<int>(MIX_GetTrackGain(global_instance.tracks[channel]->handle) * 255.f);
 }
 
 DLL_API int F_API FSOUND_GetAmplitude(int channel)
@@ -690,8 +700,10 @@ DLL_API signed char F_API FSOUND_GetReserved(int channel)
 
 DLL_API signed char F_API FSOUND_GetPaused(int channel)
 {
-    STUB();
-    return TRUE;
+    if (!check_channel(channel)) {
+        return false;
+    }
+    return MIX_TrackPaused(global_instance.tracks[channel]->handle) ? 1 : 0;
 }
 
 DLL_API unsigned int F_API FSOUND_GetLoopMode(int channel)
@@ -702,8 +714,11 @@ DLL_API unsigned int F_API FSOUND_GetLoopMode(int channel)
 
 DLL_API unsigned int F_API FSOUND_GetCurrentPosition(int channel)
 {
-    STUB();
-    return 0;
+    // in SAMPLES (SDL also takes samples)
+    if (!check_channel(channel)) {
+        return 0;
+    }
+    return MIX_GetTrackPlaybackPosition(global_instance.tracks[channel]->handle);
 }
 
 DLL_API FSOUND_SAMPLE * F_API FSOUND_GetCurrentSample(int channel)
@@ -745,8 +760,7 @@ DLL_API signed char F_API FSOUND_3D_GetMinMaxDistance(int channel, float *min, f
 
 DLL_API void F_API FSOUND_3D_Listener_SetAttributes(const float *pos, const float *vel, float fx, float fy, float fz, float tx, float ty, float tz)
 {
-    STUB();
-    return;
+    // The listener is always at coordinate (0,0,0) and can't be changed.
 }
 
 DLL_API void F_API FSOUND_3D_Listener_GetAttributes(float *pos, float *vel, float *fx, float *fy, float *fz, float *tx, float *ty, float *tz)
@@ -856,8 +870,32 @@ DLL_API signed char F_API FSOUND_Stream_SetBufferSize(int ms)
 
 DLL_API FSOUND_STREAM * F_API FSOUND_Stream_Open(const char *name_or_data, unsigned int mode, int offset, int length)
 {
-    STUB();
-    return NULL;
+    auto stream = std::make_unique<Stream>();
+
+    bool load_from_memory = FSOUND_LOADMEMORY == (mode & FSOUND_LOADMEMORY);
+
+    MIX_Audio *wave = nullptr;
+    if (!stream) {
+        return nullptr;
+    }
+    if (load_from_memory) {
+        SDL_IOStream* io = SDL_IOFromMem(const_cast<void*>(reinterpret_cast<const void*>(name_or_data)), length);
+        if (!io) {
+            return nullptr;
+        }
+        wave = MIX_LoadAudio_IO(global_instance.mixer, io, false, true);
+    } else {
+        wave = MIX_LoadAudio(global_instance.mixer, name_or_data, false);
+    }
+    if (!wave) {
+        return nullptr;
+    }
+    stream->wave = wave;
+    stream->mode = mode;
+
+    auto & stream_ref = global_instance.streams.emplace_back(std::move(stream));
+
+    return stream_ref.get();
 }
 
 DLL_API FSOUND_STREAM * F_API FSOUND_Stream_Create(FSOUND_STREAMCALLBACK callback, int length, unsigned int mode, int samplerate, void *userdata)
@@ -868,8 +906,12 @@ DLL_API FSOUND_STREAM * F_API FSOUND_Stream_Create(FSOUND_STREAMCALLBACK callbac
 
 DLL_API signed char F_API FSOUND_Stream_Close(FSOUND_STREAM *stream)
 {
-    STUB();
-    return TRUE;
+    if (stream && stream->wave) {
+        MIX_DestroyAudio(stream->wave);
+        stream->wave = nullptr;
+        return true;
+    }
+    return false;
 }
 
 DLL_API int F_API FSOUND_Stream_Play(int channel, FSOUND_STREAM *stream)
@@ -880,49 +922,131 @@ DLL_API int F_API FSOUND_Stream_Play(int channel, FSOUND_STREAM *stream)
 
 DLL_API int F_API FSOUND_Stream_PlayEx(int channel, FSOUND_STREAM *stream, FSOUND_DSPUNIT *dsp, signed char startpaused)
 {
-    STUB();
-    return 0;
+    if(!stream)
+        return -1;
+
+    if (channel == FSOUND_FREE) {
+        for (const auto & track: global_instance.tracks) {
+
+            if (!track->is_used) {
+
+                if (!MIX_SetTrackAudio(track->handle, stream->wave)) {
+                    return -1;
+                }
+                track->is_used = true;
+                stream->track = track->handle;
+
+                if (!MIX_PlayTrack(track->handle, 0)) {
+                    return -1;
+                }
+
+                if (startpaused) {
+                    if (!MIX_PauseTrack(track->handle)) {
+                        return -1;
+                    }
+                }
+                return track->channel;
+            }
+        }
+    } else {
+        abort();
+    }
+    return -1;
 }
 
 DLL_API signed char F_API FSOUND_Stream_Stop(FSOUND_STREAM *stream)
 {
-    STUB();
-    return TRUE;
+    if (!stream || !stream->track) {
+        return -1;
+    }
+    if (!MIX_StopTrack(stream->track, false)) {
+        return false;
+    }
+    return true;
+}
+
+static Sint64 get_frame_size(FSOUND_STREAM * stream) {
+
+    SDL_AudioSpec spec;
+    if (!MIX_GetAudioFormat(stream->wave, &spec)) {
+        return 0;
+    }
+    return spec.channels * SDL_AUDIO_BITSIZE(spec.format) / 8;
 }
 
 DLL_API signed char F_API FSOUND_Stream_SetPosition(FSOUND_STREAM *stream, unsigned int position)
 {
-    STUB();
-    return TRUE;
+    // in BYTES (SDL takes frames)
+    if (!stream || !stream->track) {
+        return false;
+    }
+
+    Sint64 frame_size = get_frame_size(stream);
+    if (frame_size == 0) {
+        return false;
+    }
+
+    Sint64 position_frames = position / frame_size;
+    if (!MIX_SetTrackPlaybackPosition(stream->track, position_frames)) {
+        return false;
+    }
+
+    return true;
 }
 
 DLL_API unsigned int F_API FSOUND_Stream_GetPosition(FSOUND_STREAM *stream)
 {
-    STUB();
-    return 0;
+    // in BYTES (SDL takes frames)
+    if (!stream || !stream->track) {
+        return 0;
+    }
+
+    Sint64 position_frames = MIX_GetTrackPlaybackPosition(stream->track);
+
+    return position_frames * get_frame_size(stream);
 }
 
 DLL_API signed char F_API FSOUND_Stream_SetTime(FSOUND_STREAM *stream, int ms)
 {
-    STUB();
-    return TRUE;
+    // in MILLISECONDS (SDL takes frames)
+    if (!stream || !stream->track) {
+        return false;
+    }
+
+    Sint64 position_ms = MIX_AudioMSToFrames(stream->wave, ms);
+    MIX_SetTrackPlaybackPosition(stream->track, position_ms);
+
+    return true;
 }
 
 DLL_API int F_API FSOUND_Stream_GetTime(FSOUND_STREAM *stream)
 {
-    STUB();
+    // in MILLISECONDS (SDL takes frames)
+    if (stream && stream->track) {
+        Sint64 position = MIX_GetTrackPlaybackPosition(stream->track);
+        return MIX_AudioFramesToMS(stream->wave, position);
+    }
     return 0;
 }
 
 DLL_API int F_API FSOUND_Stream_GetLength(FSOUND_STREAM *stream)
 {
-    STUB();
+    // in BYTES (SDL takes frames)
+    if (stream && stream->wave) {
+        Sint64 duration_frames = MIX_GetAudioDuration(stream->wave);
+        size_t frame_size = get_frame_size(stream);
+        return frame_size * duration_frames;
+    }
     return 0;
 }
 
 DLL_API int F_API FSOUND_Stream_GetLengthMs(FSOUND_STREAM *stream)
 {
-    STUB();
+    // in MILLISECONDS (SDL takes frames)
+    if (stream && stream->wave) {
+        Sint64 duration_frames = MIX_GetAudioDuration(stream->wave);
+        return MIX_AudioFramesToMS(stream->wave, duration_frames);
+    }
     return 0;
 }
 
@@ -968,10 +1092,33 @@ DLL_API FSOUND_DSPUNIT * F_API FSOUND_Stream_CreateDSP(FSOUND_STREAM *stream, FS
     return NULL;
 }
 
+
+
+void SDLCALL TrackStoppedCallback(void *userdata, MIX_Track *track) {
+
+    CallbackData * callback = reinterpret_cast<CallbackData *>(userdata);
+
+    if (callback->inner_callback) {
+        callback->inner_callback(callback->stream, nullptr, 0, callback->userdata);
+    }
+}
+
 DLL_API signed char F_API FSOUND_Stream_SetEndCallback(FSOUND_STREAM *stream, FSOUND_STREAMCALLBACK callback, void *userdata)
 {
     STUB();
-    return TRUE;
+
+    if (!stream || !stream->track) {
+        return false;
+    }
+
+	stream->callback_data.stream = stream;
+	stream->callback_data.inner_callback = callback;
+	stream->callback_data.userdata = userdata;
+    if (!MIX_SetTrackStoppedCallback(stream->track, TrackStoppedCallback, &stream->callback_data)) {
+        return false;
+    }
+
+    return true;
 }
 
 DLL_API signed char F_API FSOUND_Stream_SetSyncCallback(FSOUND_STREAM *stream, FSOUND_STREAMCALLBACK callback, void *userdata)

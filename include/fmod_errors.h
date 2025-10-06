@@ -1,5 +1,8 @@
-#ifndef _FMOD_ERRORS_H
-#define _FMOD_ERRORS_H
+#pragma once
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 static char *FMOD_ErrorString(int errcode)
 {
@@ -28,4 +31,6 @@ static char *FMOD_ErrorString(int errcode)
     };
 }
 
+#ifdef __cplusplus
+    }
 #endif

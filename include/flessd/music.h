@@ -1,5 +1,4 @@
-#ifndef _FLESSD_MUSIC_H_
-#define _FLESSD_MUSIC_H_
+#pragma once
 
 #ifdef __cplusplus
 extern "C" {
@@ -56,6 +55,4 @@ DLL_API void *          F_API FMUSIC_GetUserData(FMUSIC_MODULE *mod);
 
 #ifdef __cplusplus
 }
-#endif
-
 #endif

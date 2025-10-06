@@ -11,13 +11,28 @@
 
 #define STUB() fprintf(stderr, "stub! (%s)\n", __FUNCTION__);
 
-#include <SDL.h>
-#include <SDL_mixer.h>
+#include <SDL3/SDL.h>
+#include <SDL3_mixer/SDL_mixer.h>
 
 struct FSOUND_SAMPLE
 {
-    MIX_Audio *wave;
-    int index;
-    Uint32 mode;
+    MIX_Audio *wave = nullptr;
+    int index = 0;
+    Uint32 mode = 0;
+    bool is_managed = false;
+    bool loop = false;
 };
 
+struct CallbackData {
+    FSOUND_STREAM *stream = nullptr;
+    FSOUND_STREAMCALLBACK inner_callback = nullptr;
+    void * userdata = nullptr;
+};
+
+struct FSOUND_STREAM {
+    MIX_Audio *wave = nullptr;
+    MIX_Track *track = nullptr;
+    Uint32 mode = 0;
+
+    CallbackData callback_data;
+};
