@@ -436,17 +436,31 @@ DLL_API signed char F_API FSOUND_Sample_GetLoopPoints(FSOUND_SAMPLE *sptr, int *
 
 DLL_API signed char F_API FSOUND_Sample_GetDefaults(FSOUND_SAMPLE *sptr, int *deffreq, int *defvol, int *defpan, int *defpri)
 {
-    if (deffreq) {
-        *deffreq = MIX_DEFAULT_FREQUENCY;
-    }
-
-    return TRUE;
+    return FSOUND_Sample_GetDefaultsEx(sptr, deffreq, defvol, defpan, defpri, 0, 0, 0);
 }
 
 DLL_API signed char F_API FSOUND_Sample_GetDefaultsEx(FSOUND_SAMPLE *sptr, int *deffreq, int *defvol, int *defpan, int *defpri, int *varfreq, int *varvol, int *varpan)
 {
-    STUB();
-    return TRUE;
+    if (!sptr || !sptr->wave) {
+        return false;
+    }
+
+    SDL_AudioSpec spec;
+    if (!MIX_GetAudioFormat(sptr->wave, &spec)) {
+        return false;
+    }
+
+    if (deffreq) {
+        *deffreq = spec.freq;
+    }
+    if (defvol) {
+        *defvol = 255;
+    }
+    if (defpan) {
+        *defpan = 128;
+    }
+
+    return true;
 }
 
 DLL_API unsigned int F_API FSOUND_Sample_GetMode(FSOUND_SAMPLE *sptr)
