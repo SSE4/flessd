@@ -309,8 +309,9 @@ FSOUND_Sample_Load(int index, const char *name_or_data, unsigned int mode,
     bool load_from_memory = FSOUND_LOADMEMORY == (mode & FSOUND_LOADMEMORY);
     bool is_managed = index == FSOUND_UNMANAGED;
 
+    SDL_IOStream* io = nullptr;
     if (load_from_memory) {
-        SDL_IOStream* io = SDL_IOFromMem(const_cast<void*>(reinterpret_cast<const void*>(name_or_data)), length);
+        io = SDL_IOFromMem(const_cast<void*>(reinterpret_cast<const void*>(name_or_data)), length);
         if (!io) {
 			return nullptr;
         }
@@ -320,6 +321,11 @@ FSOUND_Sample_Load(int index, const char *name_or_data, unsigned int mode,
     }
 
     if(!wave) {
+
+        if (io) {
+            SDL_CloseIO(io);
+        }
+
         return nullptr;
     }
 
@@ -343,7 +349,12 @@ DLL_API FSOUND_SAMPLE * F_API FSOUND_Sample_Alloc(int index, int length, unsigne
 
 DLL_API void F_API FSOUND_Sample_Free(FSOUND_SAMPLE *sptr)
 {
-    STUB();
+    if (sptr && global_instance.mixer) {
+        if (sptr->wave) {
+			MIX_DestroyAudio(sptr->wave);
+			sptr->wave = nullptr;
+        }
+    }
     return;
 }
 
@@ -507,10 +518,12 @@ DLL_API int F_API FSOUND_PlaySoundEx(int channel, FSOUND_SAMPLE *sptr, FSOUND_DS
                     return -1;
                 }
                 if (!SDL_SetNumberProperty(properties, MIX_PROP_PLAY_LOOPS_NUMBER, sptr->loop ? -1 : 0)) {
+                    SDL_DestroyProperties(properties);
                     return -1;
                 }
 
                 if (!MIX_PlayTrack(track->handle, properties)) {
+                    SDL_DestroyProperties(properties);
                     return -1;
                 }
 
@@ -903,8 +916,9 @@ DLL_API FSOUND_STREAM * F_API FSOUND_Stream_Open(const char *name_or_data, unsig
     if (!stream) {
         return nullptr;
     }
+	SDL_IOStream* io = nullptr;
     if (load_from_memory) {
-        SDL_IOStream* io = SDL_IOFromMem(const_cast<void*>(reinterpret_cast<const void*>(name_or_data)), length);
+        io = SDL_IOFromMem(const_cast<void*>(reinterpret_cast<const void*>(name_or_data)), length);
         if (!io) {
             return nullptr;
         }
@@ -913,6 +927,9 @@ DLL_API FSOUND_STREAM * F_API FSOUND_Stream_Open(const char *name_or_data, unsig
         wave = MIX_LoadAudio(global_instance.mixer, name_or_data, false);
     }
     if (!wave) {
+        if (io) {
+			SDL_CloseIO(io);
+        }
         return nullptr;
     }
     stream->wave = wave;
@@ -931,9 +948,11 @@ DLL_API FSOUND_STREAM * F_API FSOUND_Stream_Create(FSOUND_STREAMCALLBACK callbac
 
 DLL_API signed char F_API FSOUND_Stream_Close(FSOUND_STREAM *stream)
 {
-    if (stream && stream->wave) {
-        MIX_DestroyAudio(stream->wave);
-        stream->wave = nullptr;
+    if (stream && global_instance.mixer) {
+        if (stream->wave) {
+            MIX_DestroyAudio(stream->wave);
+            stream->wave = nullptr;
+        }
         return true;
     }
     return false;
